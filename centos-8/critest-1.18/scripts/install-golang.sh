@@ -6,4 +6,4 @@ rm -fr "${_GO_DIR}"
 mv -f "${_GO_TMP}" "${_GO_DIR}"
 chmod o+rx "${_GO_DIR}"
 rm -f /usr/bin/{go,gofmt}
-ln -vs "${_GO_DIR}/bin/go" "${_GO_DIR}/bin/gofmt" /usr/bin/
+ln -fnsv "${_GO_DIR}/bin/go" "${_GO_DIR}/bin/gofmt" /usr/bin/

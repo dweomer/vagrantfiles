@@ -9,15 +9,14 @@ Vagrant.configure("2") do |config|
   #config.vagrant.plugins = ['vagrant-vbguest']
   #config.vbguest.auto_update = true
 
-  config.vm.box = "dweomer/centos-8"
+  config.vm.box = "dweomer/centos/8.2.2004"
   config.vm.box_url = "https://cloud.centos.org/centos/8/x86_64/images/CentOS-8-Vagrant-8.2.2004-20200611.2.x86_64.vagrant-virtualbox.box"
-  #config.vm.box_version = "2004"
 
   # Share an additional folder to the guest VM. The first argument is
   # the path on the host to the actual folder. The second argument is
   # the path on the guest to mount the folder. And the optional third
   # argument is a set of non-required options.
-  # config.vm.synced_folder ".", "/vagrant", disabled: true
+  config.vm.synced_folder ".", "/vagrant", disabled: true
 
   if Vagrant.has_plugin?("vagrant-timezone")
     config.timezone.value = :host
@@ -41,7 +40,7 @@ Vagrant.configure("2") do |config|
         curl \
         git \
         less \
-        selinux-policy \
+        socat \
         vim \
         wget
   SHELL
