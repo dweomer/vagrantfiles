@@ -3,18 +3,16 @@
 
 Vagrant.configure("2") do |config|
   config.vm.box = "centos/7"
+  config.vm.box_version = "2004.01"
+
   config.vm.provider :virtualbox do |v|
-    config.vm.box_url = "https://cloud.centos.org/centos/7/vagrant/x86_64/images/CentOS-7-x86_64-Vagrant-2004_01.VirtualBox.box"
     v.memory = 2048
     v.cpus = 2
   end
   config.vm.provider :libvirt do |v|
-    config.vm.box_url = "https://cloud.centos.org/centos/7/vagrant/x86_64/images/CentOS-7-x86_64-Vagrant-2004_01.LibVirt.box"
     v.memory = 2048
     v.cpus = 2
   end
-
-  config.vm.hostname = "vagabond"
 
   config.vm.provision "disable-swap", type: "shell", run: "once" do |sh|
     sh.upload_path = "/tmp/vagrant-disable-swap"
@@ -64,6 +62,7 @@ Vagrant.configure("2") do |config|
             iptables \
             less \
             lsof \
+            socat \
             lvm2 \
             runc \
             vim \
@@ -116,7 +115,7 @@ Vagrant.configure("2") do |config|
     SHELL
   end
 
-  config.vm.provision "install-containerd", type: "shell", run: "never" do |sh|
+  config.vm.provision "install-containerd", type: "shell", run: "once" do |sh|
     sh.upload_path = "/tmp/vagrant-install-containerd"
     sh.inline = <<~SHELL
         #!/usr/bin/env bash
@@ -144,9 +143,9 @@ EOF
         cat <<-EOF > /etc/crictl.yaml
 runtime-endpoint: /run/containerd/containerd.sock
 EOF
-        curl -fsSL https://github.com/containerd/containerd/releases/download/v1.4.0/containerd-1.4.0-linux-amd64.tar.gz | tar -xvz -C /usr/local
+        curl -fsSL https://github.com/containerd/containerd/releases/download/v1.4.3/containerd-1.4.3-linux-amd64.tar.gz | tar -xvz -C /usr/local
         curl -fsSL --output /usr/local/lib/systemd/system/containerd.service \
-            https://raw.githubusercontent.com/containerd/containerd/v1.4.0/containerd.service
+            https://raw.githubusercontent.com/containerd/containerd/v1.4.3/containerd.service
         /usr/local/bin/containerd --version
     SHELL
   end
@@ -188,7 +187,7 @@ EOF
     SHELL
   end
 
-  config.vm.provision "install-kubernetes", type: "shell", run: "never" do |sh|
+  config.vm.provision "install-kubernetes", type: "shell", run: "once" do |sh|
     sh.upload_path = "/tmp/vagrant-install-kubernetes"
     sh.inline = <<~SHELL
         #!/usr/bin/env bash
@@ -214,7 +213,7 @@ EOF
     SHELL
   end
 
-  config.vm.provision "enable-containerd", type: "shell", run: "never" do |sh|
+  config.vm.provision "enable-containerd", type: "shell", run: "once" do |sh|
     sh.upload_path = "/tmp/vagrant-enable-containerd"
     sh.inline = <<~SHELL
         #!/usr/bin/env bash
@@ -237,7 +236,7 @@ EOF
     SHELL
   end
 
-  config.vm.provision "enable-kubelet", type: "shell", run: "never" do |sh|
+  config.vm.provision "enable-kubelet", type: "shell", run: "once" do |sh|
     sh.upload_path = "/tmp/vagrant-enable-kubelet"
     sh.inline = <<~SHELL
         #!/usr/bin/env bash
@@ -248,7 +247,7 @@ EOF
     SHELL
   end
 
-  config.vm.provision "kubeadm-init", type: "shell", run: "never" do |sh|
+  config.vm.provision "kubeadm-init", type: "shell", run: "once" do |sh|
     sh.upload_path = "/tmp/vagrant-kubeadm-init"
     sh.inline = <<~SHELL
         #!/usr/bin/env bash

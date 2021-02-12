@@ -1,0 +1,184 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "centos/7"
+  config.vm.box_version = "2004.01"
+
+  config.vm.provider :virtualbox do |v|
+    v.memory = 2048
+    v.cpus = 2
+  end
+  config.vm.provider :libvirt do |v|
+    v.memory = 2048
+    v.cpus = 2
+  end
+
+  config.vm.provision "disable-swap", type: "shell", run: "once" do |sh|
+    sh.upload_path = "/tmp/vagrant-disable-swap"
+    sh.inline = <<~SHELL
+        #!/usr/bin/env bash
+        set -eux -o pipefail
+        if [ -f /swapfile ]; then
+            swapoff -a
+            sed -e 's/.*swapfile.*//g' -i /etc/fstab
+            rm -vf /swapfile
+        fi
+    SHELL
+  end
+
+  # Disabled by default. To run:
+  #   vagrant up --provision-with=upgrade-packages
+  # To upgrade only specific packages:
+  #   UPGRADE_PACKAGES=selinux vagrant up --provision-with=upgrade-packages
+  #
+  config.vm.provision "upgrade-packages", type: "shell", run: "never" do |sh|
+    sh.upload_path = "/tmp/vagrant-upgrade-packages"
+    sh.env = {
+        'UPGRADE_PACKAGES': ENV['UPGRADE_PACKAGES'],
+    }
+    sh.inline = <<~SHELL
+        #!/usr/bin/env bash
+        set -eux -o pipefail
+        yum -y upgrade ${UPGRADE_PACKAGES}
+    SHELL
+  end
+
+  # To re-run, installing CNI from RPM:
+  #   INSTALL_PACKAGES="containernetworking-plugins" vagrant up --provision-with=install-packages
+  #
+  config.vm.provision "install-packages", type: "shell", run: "once" do |sh|
+    sh.upload_path = "/tmp/vagrant-install-packages"
+    sh.env = {
+        'INSTALL_PACKAGES': ENV['INSTALL_PACKAGES'],
+    }
+    sh.inline = <<~SHELL
+        #!/usr/bin/env bash
+        set -eux -o pipefail
+        yum -y install \
+            containernetworking-plugins \
+            container-selinux \
+            curl \
+            iptables \
+            less \
+            lsof \
+            socat \
+            ${INSTALL_PACKAGES}
+    SHELL
+  end
+
+  # SELinux is Enforcing by default.
+  # To set SELinux as Disabled on a VM that has already been provisioned:
+  #   SELINUX=Disabled vagrant up --provision-with=selinux
+  # To set SELinux as Permissive on a VM that has already been provsioned
+  #   SELINUX=Permissive vagrant up --provision-with=selinux
+  config.vm.provision "selinux", type: "shell", run: "once" do |sh|
+    sh.upload_path = "/tmp/vagrant-selinux"
+    sh.env = {
+        'SELINUX': ENV['SELINUX'] || "Enforcing"
+    }
+    sh.inline = <<~SHELL
+        #!/usr/bin/env bash
+        set -eux -o pipefail
+
+        if ! type -p getenforce setenforce &>/dev/null; then
+          echo SELinux is Disabled
+          exit 0
+        fi
+
+        case "${SELINUX}" in
+          Disabled)
+            if mountpoint -q /sys/fs/selinux; then
+              setenforce 0
+              umount -v /sys/fs/selinux
+            fi
+            ;;
+          Enforcing)
+            mountpoint -q /sys/fs/selinux || mount -o rw,relatime -t selinuxfs selinuxfs /sys/fs/selinux
+            setenforce 1
+            ;;
+          Permissive)
+            mountpoint -q /sys/fs/selinux || mount -o rw,relatime -t selinuxfs selinuxfs /sys/fs/selinux
+            setenforce 0
+            ;;
+          *)
+            echo "SELinux mode not supported: ${SELINUX}" >&2
+            exit 1
+            ;;
+        esac
+
+        echo SELinux is $(getenforce)
+    SHELL
+  end
+
+  config.vm.provision "install-rke2-common", type: "shell", run: "once" do |sh|
+    sh.upload_path = "/tmp/vagrant-install-rke2-common"
+    sh.inline = <<~SHELL
+        #!/usr/bin/env bash
+        yum -y install https://github.com/rancher/rke2-selinux/releases/download/v0.5.testing.1/rke2-selinux-0.5-1.el7.noarch.rpm
+        cat <<-EOF > /etc/profile.d/rke2.sh
+export KUBECONFIG=/etc/rancher/rke2/rke2.yaml PATH=/usr/local/bin:$PATH:/var/lib/rancher/rke2/bin
+EOF
+    SHELL
+  end
+
+  config.vm.define "node-1" do |node|
+      node.vm.hostname = "node-1"
+      node.vm.provision "install-rke2", type: "shell", run: "once" do |sh|
+        sh.upload_path = "/tmp/vagrant-install-rke2"
+        sh.env = {
+            'INSTALL_RKE2_TYPE': "server",
+        }
+        sh.inline = <<~SHELL
+            #!/usr/bin/env bash
+            set -eux -o pipefail
+            curl -fsSL https://get.rke2.io | sh -
+            echo                                >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
+            echo "RKE2_TOKEN=test"              >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
+            echo "RKE2_KUBECONFIG_MODE=0664"    >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
+            systemctl enable --now rke2-${INSTALL_RKE2_TYPE}
+        SHELL
+      end
+  end
+
+  config.vm.define "node-2" do |node|
+      node.vm.hostname = "node-2"
+      node.vm.provision "install-rke2", type: "shell", run: "once" do |sh|
+        sh.upload_path = "/tmp/vagrant-install-rke2"
+        sh.env = {
+            'INSTALL_RKE2_TYPE': "agent",
+        }
+        sh.inline = <<~SHELL
+            #!/usr/bin/env bash
+            set -eux -o pipefail
+            curl -fsSL https://get.rke2.io | sh -
+            echo > /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
+            echo                                >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
+            echo "RKE2_TOKEN=test"              >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
+            echo "RKE2_URL=https://node-1:9345" >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
+            systemctl enable --now rke2-${INSTALL_RKE2_TYPE}
+        SHELL
+      end
+  end
+
+  config.vm.define "node-3" do |node|
+      node.vm.hostname = "node-3"
+      node.vm.provision "install-rke2", type: "shell", run: "once" do |sh|
+        sh.upload_path = "/tmp/vagrant-install-rke2"
+        sh.env = {
+            'INSTALL_RKE2_TYPE': "agent",
+        }
+        sh.inline = <<~SHELL
+            #!/usr/bin/env bash
+            set -eux -o pipefail
+            curl -fsSL https://get.rke2.io | sh -
+            echo > /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
+            echo                                >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
+            echo "RKE2_TOKEN=test"              >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
+            echo "RKE2_URL=https://node-1:9345" >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
+            systemctl enable --now rke2-${INSTALL_RKE2_TYPE}
+        SHELL
+      end
+  end
+
+end
