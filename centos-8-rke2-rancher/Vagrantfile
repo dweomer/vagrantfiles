@@ -56,7 +56,6 @@ Vagrant.configure("2") do |config|
         #!/usr/bin/env bash
         set -eux -o pipefail
         yum -y install \
-            containernetworking-plugins \
             container-selinux \
             curl \
             iptables \
@@ -70,7 +69,7 @@ Vagrant.configure("2") do |config|
   # SELinux is Enforcing by default.
   # To set SELinux as Disabled on a VM that has already been provisioned:
   #   SELINUX=Disabled vagrant up --provision-with=selinux
-  # To set SELinux as Permissive on a VM that has already been provsioned
+  # To set SELinux as Permissive on a VM that has already been provisioned
   #   SELINUX=Permissive vagrant up --provision-with=selinux
   config.vm.provision "selinux", type: "shell", run: "once" do |sh|
     sh.upload_path = "/tmp/vagrant-selinux"
@@ -115,7 +114,8 @@ Vagrant.configure("2") do |config|
     sh.upload_path = "/tmp/vagrant-install-rke2-common"
     sh.inline = <<~SHELL
         #!/usr/bin/env bash
-        yum -y install https://github.com/rancher/rke2-selinux/releases/download/v0.5.testing.1/rke2-selinux-0.5-1.el8.noarch.rpm
+        # yum -y install https://github.com/rancher/rke2-selinux/releases/download/v0.5.testing.1/rke2-selinux-0.5-1.el7.noarch.rpm
+        # yum -y install 'https://github.com/dweomer/rke2-selinux/releases/download/v0.5-dev.3%2Brke2.690/rke2-selinux-0.5-3.el7.noarch.rpm'
         cat <<-EOF > /etc/profile.d/rke2.sh
 export KUBECONFIG=/etc/rancher/rke2/rke2.yaml PATH=/usr/local/bin:$PATH:/var/lib/rancher/rke2/bin
 EOF
@@ -136,14 +136,17 @@ EOF
         sh.upload_path = "/tmp/vagrant-install-rke2"
         sh.env = {
             'INSTALL_RKE2_TYPE': "server",
+            'INSTALL_RKE2_CHANNEL': ENV['INSTALL_RKE2_CHANNEL'] || "stable",
+            'RKE2_DEBUG': ENV['RKE2_DEBUG'],
+            'RKE2_KUBECONFIG_MODE': ENV['RKE2_KUBECONFIG_MODE'] || "0664",
+            'RKE2_RUNTIME_IMAGE': ENV['RKE2_RUNTIME_IMAGE'], # dweomer/rke2-runtime:v1.19.7-rke2-containerd-v1.4.3
+            'RKE2_TOKEN': ENV['RKE2_TOKEN'] || "test",
         }
         sh.inline = <<~SHELL
             #!/usr/bin/env bash
             set -eux -o pipefail
             curl -fsSL https://get.rke2.io | sh -
-            echo                                >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
-            echo "RKE2_TOKEN=test"              >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
-            echo "RKE2_KUBECONFIG_MODE=0664"    >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
+            env | grep -E '^RKE2' > /usr/lib/systemd/system/rke2-${INSTALL_RKE2_TYPE}.env
             systemctl enable --now rke2-${INSTALL_RKE2_TYPE}
         SHELL
       end
@@ -192,11 +195,10 @@ EOF
         sh.inline = <<~SHELL
             #!/usr/bin/env bash
             set -eux -o pipefail
-            kubectl apply --validate=false -f https://github.com/jetstack/cert-manager/releases/download/v1.0.4/cert-manager.crds.yaml
             kubectl create namespace cert-manager
             helm repo add jetstack https://charts.jetstack.io
             helm repo update
-            helm install cert-manager jetstack/cert-manager --namespace cert-manager --version v1.0.4
+            helm install cert-manager jetstack/cert-manager --namespace cert-manager --version v1.1.0 --set installCRDs=true
             kubectl -n cert-manager rollout status deploy/cert-manager
         SHELL
       end
@@ -224,15 +226,17 @@ EOF
         sh.upload_path = "/tmp/vagrant-install-rke2"
         sh.env = {
             'INSTALL_RKE2_TYPE': "agent",
+            'INSTALL_RKE2_CHANNEL': ENV['INSTALL_RKE2_CHANNEL'] || "stable",
+            'RKE2_DEBUG': ENV['RKE2_DEBUG'],
+            'RKE2_RUNTIME_IMAGE': ENV['RKE2_RUNTIME_IMAGE'], # dweomer/rke2-runtime:v1.19.7-rke2-containerd-v1.4.3
+            'RKE2_TOKEN': ENV['RKE2_TOKEN'] || "test",
+            'RKE2_URL': "https://node-1:9345",
         }
         sh.inline = <<~SHELL
             #!/usr/bin/env bash
             set -eux -o pipefail
             curl -fsSL https://get.rke2.io | sh -
-            echo > /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
-            echo                                >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
-            echo "RKE2_TOKEN=test"              >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
-            echo "RKE2_URL=https://node-1:9345" >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
+            env | grep -E '^RKE2' > /usr/lib/systemd/system/rke2-${INSTALL_RKE2_TYPE}.env
             systemctl enable --now rke2-${INSTALL_RKE2_TYPE}
         SHELL
       end
@@ -244,15 +248,17 @@ EOF
         sh.upload_path = "/tmp/vagrant-install-rke2"
         sh.env = {
             'INSTALL_RKE2_TYPE': "agent",
+            'INSTALL_RKE2_CHANNEL': ENV['INSTALL_RKE2_CHANNEL'] || "stable",
+            'RKE2_DEBUG': ENV['RKE2_DEBUG'],
+            'RKE2_RUNTIME_IMAGE': ENV['RKE2_RUNTIME_IMAGE'], # dweomer/rke2-runtime:v1.19.7-rke2-containerd-v1.4.3
+            'RKE2_TOKEN': ENV['RKE2_TOKEN'] || "test",
+            'RKE2_URL': "https://node-1:9345",
         }
         sh.inline = <<~SHELL
             #!/usr/bin/env bash
             set -eux -o pipefail
             curl -fsSL https://get.rke2.io | sh -
-            echo > /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
-            echo                                >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
-            echo "RKE2_TOKEN=test"              >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
-            echo "RKE2_URL=https://node-1:9345" >> /etc/sysconfig/rke2-${INSTALL_RKE2_TYPE}
+            env | grep -E '^RKE2' > /usr/lib/systemd/system/rke2-${INSTALL_RKE2_TYPE}.env
             systemctl enable --now rke2-${INSTALL_RKE2_TYPE}
         SHELL
       end
