@@ -4,7 +4,7 @@
 # 1. Download SLES 15sp3 vagrant box from https://www.suse.com/download/sles/
 # 2. Add the box to your vagrant installation:
 #    vagrant box add --name sles15sp3 ~/Downloads/SLES15-SP3-Vagrant.x86_64-15.3-libvirt-PublicRC.vagrant.libvirt.box
-# 3. SLES_REGCODE=<sles regcode> MICRO_REGCODE=<microos regcode> SELINUX=Permissive vagrant up
+# 3. SLES_REGCODE=<sles regcode> MICRO_REGCODE=<microos regcode> vagrant up
 
 Vagrant.configure("2") do |config|
   config.vm.box = "sles15sp3"
@@ -43,16 +43,17 @@ Vagrant.configure("2") do |config|
     sh.inline = <<~SHELL
         #!/usr/bin/env bash
         set -eux -o pipefail
-        zypper install --allow-unsigned-rpm --no-confirm \
+        zypper update --repo SUSE-MicroOS-5.1-Pool --no-confirm
+        zypper install --repo SUSE-MicroOS-5.1-Pool --no-confirm --allow-unsigned-rpm \
             audit \
+            bash \
             curl \
             iptables \
             less \
             lsof \
-            mcstrans \
             patterns-microos-selinux \
             policycoreutils-python-utils \
-            socat \
+            systemd \
             ${INSTALL_PACKAGES}
     SHELL
   end
@@ -75,6 +76,7 @@ Vagrant.configure("2") do |config|
         #!/usr/bin/env bash
         set -eux -o pipefail
         restorecon -R /
+        truncate /var/log/audit/audit.log --reference /dev/null
     SHELL
   end
   config.vm.provision "selinux-restorecon-reload", type: "reload", run: "once"
