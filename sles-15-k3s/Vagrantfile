@@ -1,0 +1,177 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# 1. Download SLES 15sp3 vagrant box from https://www.suse.com/download/sles/
+# 2. Add the box to your vagrant installation:
+#    vagrant box add --name sles15sp3 ~/Downloads/SLES15-SP3-Vagrant.x86_64-15.3-libvirt-PublicRC.vagrant.libvirt.box
+# 3. SLES_REGCODE=<sles regcode> MICRO_REGCODE=<microos regcode> SELINUX=Permissive vagrant up
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "sles15sp3"
+
+  config.vm.provider :virtualbox do |v|
+    v.memory = 2048
+    v.cpus = 2
+  end
+  config.vm.provider :libvirt do |v|
+    v.memory = 2048
+    v.cpus = 2
+  end
+
+  config.vm.synced_folder '.', '/vagrant', disabled: true
+
+  config.vm.provision "register", type: "shell", run: "once" do |sh|
+    sh.upload_path = "/tmp/vagrant-register"
+    sh.env = {
+        'SLES_REGCODE': ENV['SLES_REGCODE'],
+        'MICRO_REGCODE': ENV['MICRO_REGCODE'],
+        'MICRO_PRODUCT': ENV['MICRO_PRODUCT'] || "SUSE-MicroOS/5.1/x86_64",
+    }
+    sh.inline = <<~SHELL
+        #!/usr/bin/env bash
+        set -eux -o pipefail
+        SUSEConnect -r "${SLES_REGCODE}"
+        SUSEConnect -r "${MICRO_REGCODE}" -p "${MICRO_PRODUCT}" || true
+    SHELL
+  end
+
+  config.vm.provision "packages", type: "shell", run: "once" do |sh|
+    sh.upload_path = "/tmp/vagrant-packages"
+    sh.env = {
+        'INSTALL_PACKAGES': ENV['INSTALL_PACKAGES'] || "https://github.com/dweomer/k3s-selinux/releases/download/v0.5.testing.1/k3s-selinux-0.5-1.sle.noarch.rpm",
+    }
+    sh.inline = <<~SHELL
+        #!/usr/bin/env bash
+        set -eux -o pipefail
+        zypper install --allow-unsigned-rpm --no-confirm \
+            audit \
+            curl \
+            iptables \
+            less \
+            lsof \
+            mcstrans \
+            patterns-microos-selinux \
+            policycoreutils-python-utils \
+            socat \
+            ${INSTALL_PACKAGES}
+    SHELL
+  end
+
+  config.vm.provision "selinux-grub", type: "shell", run: "once" do |sh|
+    sh.upload_path = "/tmp/vagrant-selinux-grub"
+    sh.inline = <<~SHELL
+        #!/usr/bin/env bash
+        set -eux -o pipefail
+        mv -vf /etc/default/grub /etc/default/grub.orig
+        sed -r 's/(GRUB_CMDLINE_LINUX_DEFAULT)[=]["](.*)["]/\\1="\\2 security=selinux selinux=1 enforcing=0"/g' < /etc/default/grub.orig > /etc/default/grub
+        grub2-mkconfig -o /boot/grub2/grub.cfg
+    SHELL
+  end
+  config.vm.provision "selinux-grub-reload", type: "reload", run: "once"
+
+  config.vm.provision "selinux-restorecon", type: "shell", run: "once" do |sh|
+    sh.upload_path = "/tmp/vagrant-selinux-restorecon"
+    sh.inline = <<~SHELL
+        #!/usr/bin/env bash
+        set -eux -o pipefail
+        restorecon -R /
+    SHELL
+  end
+  config.vm.provision "selinux-restorecon-reload", type: "reload", run: "once"
+
+  # SELinux is Enforcing by default.
+  # To set SELinux as Disabled on a VM that has already been provisioned:
+  #   SELINUX=Disabled vagrant up --provision-with=selinux
+  # To set SELinux as Permissive on a VM that has already been provsioned
+  #   SELINUX=Permissive vagrant up --provision-with=selinux
+  config.vm.provision "selinux", type: "shell", run: "once" do |sh|
+    sh.upload_path = "/tmp/vagrant-selinux"
+    sh.env = {
+        'SELINUX': ENV['SELINUX'] || "Enforcing"
+    }
+    sh.inline = <<~SHELL
+        #!/usr/bin/env bash
+        set -eux -o pipefail
+        if ! type -p getenforce setenforce &>/dev/null; then
+          echo SELinux is Unsupported
+          exit 0
+        fi
+
+        case "${SELINUX}" in
+          Disabled)
+            if mountpoint -q /sys/fs/selinux; then
+              setenforce 0
+              umount -v /sys/fs/selinux
+            fi
+            ;;
+          Enforcing)
+            mountpoint -q /sys/fs/selinux || mount -o rw,relatime -t selinuxfs selinuxfs /sys/fs/selinux
+            setenforce 1
+            ;;
+          Permissive)
+            mountpoint -q /sys/fs/selinux || mount -o rw,relatime -t selinuxfs selinuxfs /sys/fs/selinux
+            setenforce 0
+            ;;
+          *)
+            echo "SELinux mode not supported: ${SELINUX}" >&2
+            exit 1
+            ;;
+        esac
+
+        echo SELinux is $(getenforce)
+    SHELL
+  end
+
+  config.vm.define "node-1" do |node|
+      node.vm.hostname = "node-1"
+      node.vm.provision "install-k3s", type: "shell", run: "once" do |sh|
+        sh.upload_path = "/tmp/vagrant-install-k3s"
+        sh.env = {
+            'INSTALL_K3S_CHANNEL': ENV['INSTALL_K3S_CHANNEL'] || "stable",
+            'INSTALL_K3S_SKIP_START': "true",
+            'K3S_SELINUX': "true",
+            'K3S_TOKEN': "sles15sp3",
+            'K3S_KUBECONFIG_MODE': "0644",
+        }
+        sh.inline = <<~SHELL
+            #!/usr/bin/env bash
+            set -eux -o pipefail
+            mkdir -vp /etc/systemd/system/k3s.service.d
+            cat << EOF > /etc/systemd/system/k3s.service.d/restorecon.conf
+[Service]
+ExecStartPre=-/sbin/restorecon /usr/local/bin/k3s
+EOF
+            curl -fsSL https://get.k3s.io | sh
+            chmod +x /usr/local/bin/k3s
+            systemctl enable --now k3s || true
+        SHELL
+      end
+  end
+
+  config.vm.define "node-2" do |node|
+      node.vm.hostname = "node-2"
+      node.vm.provision "install-k3s", type: "shell", run: "once" do |sh|
+        sh.upload_path = "/tmp/vagrant-install-k3s"
+        sh.env = {
+            'INSTALL_K3S_CHANNEL': ENV['INSTALL_K3S_CHANNEL'] || "stable",
+            'INSTALL_K3S_SKIP_START': "true",
+            'K3S_SELINUX': "true",
+            'K3S_TOKEN': "sles15sp3",
+            'K3S_URL': "https://node-1:6443",
+        }
+        sh.inline = <<~SHELL
+            #!/usr/bin/env bash
+            set -eux -o pipefail
+            mkdir -vp /etc/systemd/system/k3s-agent.service.d
+            cat << EOF > /etc/systemd/system/k3s-agent.service.d/restorecon.conf
+[Service]
+ExecStartPre=-/sbin/restorecon /usr/local/bin/k3s
+EOF
+            curl -fsSL https://get.k3s.io | sh
+            chmod +x /usr/local/bin/k3s
+            systemctl enable --now k3s-agent || true
+        SHELL
+      end
+  end
+
+end
