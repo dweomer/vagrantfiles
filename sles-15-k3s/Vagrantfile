@@ -10,12 +10,12 @@
 #    vagrant box add --name sles15sp3 ~/Downloads/SLES15-SP3-Vagrant.x86_64-15.3-libvirt-PublicRC.vagrant.libvirt.box
 # 3. SLES_REGCODE=<sles regcode> MICRO_REGCODE=<microos regcode> vagrant up
 #
-PREFIX  = ENV.fetch('PREFIX',  ENV.fetch('PFX', ENV.fetch('X',"frankensles")))  # node name prefix
+PREFIX  = ENV.fetch('PREFIX',  ENV.fetch('PFX', ENV.fetch('X',"sles")))  # node name prefix
 SERVERS = ENV.fetch('SERVERS', ENV.fetch('SRV', ENV.fetch('S',"1"))).to_i       # number of server nodes
 WORKERS = ENV.fetch('WORKERS', ENV.fetch('WKR', ENV.fetch('W',"2"))).to_i       # number of agent nodes
 
 K3S_SELINUX = (!['0', 'false'].include?(ENV['K3S_SELINUX'])).to_s               # enable selinux by default
-K3S_TOKEN   = ENV['K3S_TOKEN'] || "FrankenSLES"                                 # shared secret for joining
+K3S_TOKEN   = ENV['K3S_TOKEN'] || "sles15sp3"                                   # shared secret for joining
 DOCKER      = ['1', 'true'].include?(ENV['DOCKER']).to_s                        # install and enable docker cri?
 
 ENV['K3S_SELINUX'] = K3S_SELINUX
@@ -134,10 +134,10 @@ UNIT
   end
 
   # To re-run, installing CNI from RPM:
-  #   PACKAGES="containernetworking-plugins" vagrant up --provision-with=frankensles-packages
+  #   PACKAGES="containernetworking-plugins" vagrant up --provision-with=packages
   #
-  config.vm.provision "frankensles-packages", type: "shell", run: "once" do |sh|
-    sh.upload_path = "/tmp/vagrant-frankensles-packages"
+  config.vm.provision "packages", type: "shell", run: "once" do |sh|
+    sh.upload_path = "/tmp/vagrant-packages"
     sh.env = {
         'PACKAGES': ENV['PACKAGES'] || "https://github.com/k3s-io/k3s-selinux/releases/download/v0.4-rc1.testing.1/k3s-selinux-0.4.rc1-1.sle.noarch.rpm",
         'MICRO_REPO': ENV['MICRO_REPO'] || "SUSE-MicroOS-5.1-Pool",
@@ -163,8 +163,8 @@ UNIT
   end
 
   # configure kernel command-line then reboot
-  config.vm.provision "frankensles-selinux-grub", type: "shell", run: "once" do |sh|
-    sh.upload_path = "/tmp/vagrant-frankensles-selinux-grub"
+  config.vm.provision "sles-selinux-grub", type: "shell", run: "once" do |sh|
+    sh.upload_path = "/tmp/vagrant-sles-selinux-grub"
     sh.inline = <<~SHELL
         #!/usr/bin/env bash
         set -eux -o pipefail
@@ -172,11 +172,11 @@ UNIT
         grub2-mkconfig -o /boot/grub2/grub.cfg
     SHELL
   end
-  config.vm.provision "frankensles-selinux-grub-reboot", type: "reload", run: "once"
+  config.vm.provision "sles-selinux-grub-reboot", type: "reload", run: "once"
 
   # label the entire filesystem then reboot
-  config.vm.provision "frankensles-selinux-restorecon", type: "shell", run: "once" do |sh|
-    sh.upload_path = "/tmp/vagrant-frankensles-selinux-restorecon"
+  config.vm.provision "sles-selinux-restorecon", type: "shell", run: "once" do |sh|
+    sh.upload_path = "/tmp/vagrant-sles-selinux-restorecon"
     sh.inline = <<~SHELL
         #!/usr/bin/env bash
         set -eux -o pipefail
@@ -186,7 +186,7 @@ UNIT
         sed -e 's/SELINUX=.*/SELINUX=enforcing/g' -i.orig /etc/selinux/config
     SHELL
   end
-  config.vm.provision "frankensles-selinux-restorecon-reboot", type: "reload", run: "once"
+  config.vm.provision "sles-selinux-restorecon-reboot", type: "reload", run: "once"
 
   # SELinux is Enforcing by default.
   # To set SELinux as Disabled on a VM that has already been provisioned:
