@@ -1,17 +1,112 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
 
+PREFIX  = ENV.fetch('PREFIX',  ENV.fetch('PFX', ENV.fetch('X',"fc32")))     # node name prefix
+SERVERS = ENV.fetch('SERVERS', ENV.fetch('SRV', ENV.fetch('S',"1"))).to_i   # number of server nodes
+WORKERS = ENV.fetch('WORKERS', ENV.fetch('WKR', ENV.fetch('W',"2"))).to_i   # number of agent nodes
+
+K3S_SELINUX = (!['0', 'false'].include?(ENV['K3S_SELINUX'])).to_s           # enable selinux by default
+K3S_TOKEN   = ENV['K3S_TOKEN'] || "fedora/32"                                # shared secret for joining
+DOCKER      = ['1', 'true'].include?(ENV['DOCKER']).to_s                    # install and enable docker cri?
+
+ENV['K3S_SELINUX'] = K3S_SELINUX
+ENV['K3S_TOKEN']   = K3S_TOKEN
+ENV['DOCKER']      = DOCKER
+
 Vagrant.configure("2") do |config|
+  config.vagrant.plugins = ["vagrant-timezone"]
+
+  config.timezone.value = :host
+
   config.vm.box = "fedora/32-cloud-base"
   config.vm.box_version = "32.20200422.0"
 
-  config.vm.provider :virtualbox do |v|
-    v.memory = 2048
-    v.cpus = 2
+  ["libvirt", "virtualbox"].each do |p|
+    config.vm.provider p do |v, o|
+      v.memory = "2048"
+      v.cpus = 2
+    end
   end
-  config.vm.provider :libvirt do |v|
-    v.memory = 2048
-    v.cpus = 2
+
+  config.vm.synced_folder '.', '/vagrant', disabled: true
+
+  SERVERS.times do |i|
+    config.vm.define "srv-#{i+1}", primary: i==0 do |node|
+      node.vm.hostname = "#{PREFIX}-srv-#{i+1}"
+      node.vm.provision "install-k3s", type: "shell", run: "once" do |sh|
+        sh.upload_path = "/tmp/vagrant-install-k3s"
+        # inject provision-time environment variables
+        sh.env = ENV.select{|k,v| k.start_with?('K3S_') || k.start_with?('INSTALL_K3S_')}.merge({
+            :INSTALL_K3S_EXEC => "server",
+            :INSTALL_K3S_NAME => "server",
+            :INSTALL_K3S_SKIP_SELINUX_RPM => "true",
+            :INSTALL_K3S_SKIP_START => "true",
+            :K3S_KUBECONFIG_MODE => "0644",
+        })
+        if i == 0 then
+            sh.env['K3S_CLUSTER_INIT'] = "true"                     # the first server is special
+        else
+            sh.env['K3S_URL'] = "https://#{PREFIX}-srv-1:6443"      # the remaining servers are not
+        end
+        # 1. setup k3s config file
+        # 2. augment unit with an exec-start-pre restorecon to guard against naive updates
+        # 3. install k3s
+        # 4. enable the unit
+        sh.inline = <<~SHELL
+            #!/usr/bin/env bash
+            set -eux -o pipefail
+            mkdir -vp /etc/rancher/k3s
+            cat << CONF > /etc/rancher/k3s/config.yaml
+docker: #{DOCKER}
+CONF
+            mkdir -vp /etc/systemd/system/k3s-${INSTALL_K3S_NAME}.service.d
+            cat << UNIT > /etc/systemd/system/k3s-${INSTALL_K3S_NAME}.service.d/restorecon.conf
+[Service]
+ExecStartPre=-/sbin/restorecon /usr/local/bin/k3s
+UNIT
+            curl -fsSL https://get.k3s.io | sh
+            chmod +x /usr/local/bin/k3s
+            systemctl enable --now k3s-${INSTALL_K3S_NAME} || true
+        SHELL
+      end
+    end
+  end
+
+  WORKERS.times do |i|
+    config.vm.define "wkr-#{i+1}" do |node|
+      node.vm.hostname = "#{PREFIX}-wkr-#{i+1}"
+      node.vm.provision "install-k3s", type: "shell", run: "once" do |sh|
+        sh.upload_path = "/tmp/vagrant-install-k3s"
+        # inject provision-time environment variables
+        sh.env = ENV.select{|k,v| k.start_with?('K3S_') || k.start_with?('INSTALL_K3S_')}.merge({
+            :INSTALL_K3S_EXEC => "agent",
+            :INSTALL_K3S_NAME => "agent",
+            :INSTALL_K3S_SKIP_SELINUX_RPM => "true",
+            :INSTALL_K3S_SKIP_START => "true",
+            :K3S_URL => "https://#{PREFIX}-srv-1:6443",
+        })
+        # 1. setup k3s config file
+        # 2. augment unit with an exec-start-pre restorecon to guard against naive updates
+        # 3. install k3s
+        # 4. enable the unit
+        sh.inline = <<~SHELL
+            #!/usr/bin/env bash
+            set -eux -o pipefail
+            mkdir -vp /etc/rancher/k3s
+            cat << CONF > /etc/rancher/k3s/config.yaml
+docker: #{DOCKER}
+CONF
+            mkdir -vp /etc/systemd/system/k3s-${INSTALL_K3S_NAME}.service.d
+            cat << UNIT > /etc/systemd/system/k3s-${INSTALL_K3S_NAME}.service.d/restorecon.conf
+[Service]
+ExecStartPre=-/sbin/restorecon /usr/local/bin/k3s
+UNIT
+            curl -fsSL https://get.k3s.io | sh
+            chmod +x /usr/local/bin/k3s
+            systemctl enable --now k3s-${INSTALL_K3S_NAME} || true
+        SHELL
+      end
+    end
   end
 
   config.vm.provision "enable-hybrid-cgroups-then-reboot", type: "shell", run: "once" do |sh|
@@ -38,7 +133,7 @@ Vagrant.configure("2") do |config|
   # Disabled by default. To run:
   #   vagrant up --provision-with=upgrade-packages
   # To upgrade only specific packages:
-  #   UPGRADE_PACKAGES=selinux vagrant up --provision-with=upgrade-packages
+  #   UPGRADE_PACKAGES=container-selinux vagrant up --provision-with=upgrade-packages
   #
   config.vm.provision "upgrade-packages", type: "shell", run: "never" do |sh|
     sh.upload_path = "/tmp/vagrant-upgrade-packages"
@@ -58,16 +153,15 @@ Vagrant.configure("2") do |config|
   config.vm.provision "install-packages", type: "shell", run: "once" do |sh|
     sh.upload_path = "/tmp/vagrant-install-packages"
     sh.env = {
-        'INSTALL_PACKAGES': ENV['INSTALL_PACKAGES'],
+        'INSTALL_PACKAGES': ENV['INSTALL_PACKAGES'] || "https://github.com/k3s-io/k3s-selinux/releases/download/v0.4-rc1.testing.1/k3s-selinux-0.4.rc1-1.el8.noarch.rpm",
     }
     sh.inline = <<~SHELL
         #!/usr/bin/env bash
         set -eux -o pipefail
+        rpm --import https://rpm-testing.rancher.io/public.key
+        rpm --import https://rpm.rancher.io/public.key
         yum -y install \
-            containernetworking-plugins \
-            container-selinux \
             curl \
-            dnf-plugins-core \
             iptables \
             less \
             lsof \
@@ -91,7 +185,7 @@ Vagrant.configure("2") do |config|
         set -eux -o pipefail
 
         if ! type -p getenforce setenforce &>/dev/null; then
-          echo SELinux is Disabled
+          echo SELinux is Unsupported
           exit 0
         fi
 
@@ -115,25 +209,68 @@ Vagrant.configure("2") do |config|
             exit 1
             ;;
         esac
+        sestatus -v
+    SHELL
+  end
 
-        echo SELinux is $(getenforce)
+  config.vm.provision "install-docker", type: "shell", run: (DOCKER == "true" ? "once" : "never") do |sh|
+    sh.upload_path = "/tmp/vagrant-install-docker"
+    sh.inline = <<~SHELL
+        #!/usr/bin/env bash
+        set -eux -o pipefail
+        dnf -y install dnf-plugins-core
+        dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+        dnf -y install \
+            containerd.io \
+            docker-ce \
+            docker-ce-cli
+        mkdir -vp /etc/docker
+        cat <<-EOF >/etc/docker/daemon.json
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "100m"
+  },
+  "selinux-enabled": #{K3S_SELINUX},
+  "storage-driver": "overlay2",
+  "storage-opts": [
+    "overlay2.override_kernel_check=true"
+  ]
+}
+EOF
+        mkdir -vp /usr/lib/systemd/system/docker.service.d
+        cat <<-EOF > /usr/lib/systemd/system/docker.service.d/00-local.conf
+[Service]
+ExecStartPre=-/sbin/modprobe br_netfilter
+ExecStartPre=-/sbin/sysctl -w net.bridge.bridge-nf-call-iptables=1
+ExecStartPre=-/sbin/sysctl -w net.bridge.bridge-nf-call-ip6tables=1
+ExecStartPre=-/sbin/sysctl -w net.ipv4.conf.all.forwarding=1
+ExecStartPre=-/sbin/sysctl -w net.ipv6.conf.all.forwarding=1
+EOF
+        systemctl enable --now docker
     SHELL
   end
 
   config.vm.provision "install-suc", type: "shell", run: "never" do |sh|
     sh.upload_path = "/tmp/vagrant-install-suc"
+    sh.env = {
+        'SUC_MANIFEST_URL': ENV['SUC_MANIFEST_URL'] || "https://github.com/rancher/system-upgrade-controller/releases/download/v0.7.5/system-upgrade-controller.yaml",
+    }
     sh.inline = <<~SHELL
         #!/usr/bin/env bash
         set -eux -o pipefail
         while ! /usr/local/bin/kubectl get node &>/dev/null; do
             sleep 5
         done
-        curl -fsSL https://raw.githubusercontent.com/rancher/system-upgrade-controller/master/manifests/system-upgrade-controller.yaml | /usr/local/bin/kubectl apply -f-
+        curl -fsSL ${SUC_MANIFEST_URL} | /usr/local/bin/kubectl apply -f-
     SHELL
   end
 
   config.vm.provision "install-suc-plans", type: "shell", run: "never" do |sh|
     sh.upload_path = "/tmp/vagrant-install-suc-plans"
+    sh.env = {
+        'UPGRADE_K3S_VERSION': ENV['UPGRADE_K3S_VERSION'],
+    }
     sh.inline = <<~SHELL
         #!/usr/bin/env bash
         set -eux -o pipefail
@@ -151,14 +288,11 @@ metadata:
     k3s-upgrade: server
 spec:
   concurrency: 1
-  version: v1.19.3+k3s1
+  version: ${UPGRADE_K3S_VERSION}
   nodeSelector:
     matchExpressions:
-      - {key: k3s-upgrade, operator: Exists}
-      - {key: k3s-upgrade, operator: NotIn, values: ["disabled", "false"]}
-      - {key: k3s.io/hostname, operator: Exists}
-      - {key: k3os.io/mode, operator: DoesNotExist}
-      - {key: node-role.kubernetes.io/master, operator: In, values: ["true"]}
+      - {key: k3s.io/upgrade, operator: In, values: ["true", "enabled"]}
+      - {key: node-role.kubernetes.io/master, operator: Exists}
   serviceAccountName: system-upgrade
   cordon: true
   upgrade:
@@ -173,14 +307,11 @@ metadata:
     k3s-upgrade: agent
 spec:
   concurrency: 2
-  version: v1.19.3+k3s1
+  version: ${UPGRADE_K3S_VERSION}
   nodeSelector:
     matchExpressions:
-      - {key: k3s-upgrade, operator: Exists}
-      - {key: k3s-upgrade, operator: NotIn, values: ["disabled", "false"]}
-      - {key: k3s.io/hostname, operator: Exists}
-      - {key: k3os.io/mode, operator: DoesNotExist}
-      - {key: node-role.kubernetes.io/master, operator: NotIn, values: ["true"]}
+      - {key: k3s.io/upgrade, operator: In, values: ["true", "enabled"]}
+      - {key: node-role.kubernetes.io/master, operator: DoesNotExist}
   serviceAccountName: system-upgrade
   prepare:
     image: rancher/k3s-upgrade
@@ -205,67 +336,8 @@ EOF
         while ! /usr/local/bin/kubectl get node &>/dev/null; do
             sleep 5
         done
-        /usr/local/bin/kubectl label node --all k3s-upgrade=true --overwrite=true
+        /usr/local/bin/kubectl label node --all k3s.io/upgrade=enabled --overwrite=true
     SHELL
-  end
-
-  config.vm.provision "install-k3s-selinux", type: "shell", run: "never" do |sh|
-    sh.upload_path = "/tmp/vagrant-install-k3s-selinux"
-    sh.inline = <<~SHELL
-        #!/usr/bin/env bash
-        set -eux -o pipefail
-        yum -y install https://github.com/k3s-io/k3s-selinux/releases/download/v0.3-rc1.testing.2/k3s-selinux-0.3.rc1-2.el8.noarch.rpm
-    SHELL
-  end
-
-  config.vm.define "node-1" do |node|
-      node.vm.hostname = "node-1"
-      node.vm.provision "install-k3s", type: "shell", run: "once" do |sh|
-        sh.upload_path = "/tmp/vagrant-install-k3s"
-        sh.env = {
-            'INSTALL_K3S_CHANNEL': ENV['INSTALL_K3S_CHANNEL'] || "stable",
-            'INSTALL_K3S_SKIP_START': "true",
-            'K3S_SELINUX': "true",
-            'K3S_TOKEN': "fedora/32",
-            'K3S_KUBECONFIG_MODE': "0644",
-        }
-        sh.inline = <<~SHELL
-            #!/usr/bin/env bash
-            set -eux -o pipefail
-            mkdir -vp /etc/systemd/system/k3s.service.d
-            cat << EOF > /etc/systemd/system/k3s.service.d/restorecon.conf
-[Service]
-ExecStartPre=-/sbin/restorecon /usr/local/bin/k3s
-EOF
-            curl -fsSL https://get.k3s.io | sh
-            systemctl enable --now k3s || true
-        SHELL
-      end
-  end
-
-  config.vm.define "node-2" do |node|
-      node.vm.hostname = "node-2"
-      node.vm.provision "install-k3s", type: "shell", run: "once" do |sh|
-        sh.upload_path = "/tmp/vagrant-install-k3s"
-        sh.env = {
-            'INSTALL_K3S_CHANNEL': ENV['INSTALL_K3S_CHANNEL'] || "stable",
-            'INSTALL_K3S_SKIP_START': "true",
-            'K3S_SELINUX': "true",
-            'K3S_TOKEN': "fedora/32",
-            'K3S_URL': "https://node-1:6443",
-        }
-        sh.inline = <<~SHELL
-            #!/usr/bin/env bash
-            set -eux -o pipefail
-            mkdir -vp /etc/systemd/system/k3s-agent.service.d
-            cat << EOF > /etc/systemd/system/k3s-agent.service.d/restorecon.conf
-[Service]
-ExecStartPre=-/sbin/restorecon /usr/local/bin/k3s
-EOF
-            curl -fsSL https://get.k3s.io | sh
-            systemctl enable --now k3s-agent || true
-        SHELL
-      end
   end
 
 end
