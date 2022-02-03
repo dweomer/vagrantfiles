@@ -139,7 +139,7 @@ UNIT
   config.vm.provision "packages", type: "shell", run: "once" do |sh|
     sh.upload_path = "/tmp/vagrant-packages"
     sh.env = {
-        'PACKAGES': ENV['PACKAGES'] || "https://github.com/k3s-io/k3s-selinux/releases/download/v0.5.testing.2/container-selinux-2.164.3-0.noarch.rpm https://github.com/k3s-io/k3s-selinux/releases/download/v0.5.testing.2/k3s-selinux-0.5-2.sle.noarch.rpm",
+        'PACKAGES': ENV['PACKAGES'] || "https://github.com/k3s-io/k3s-selinux/releases/download/v1.0.testing.1/container-selinux-2.171.0-99.sle.noarch.rpm https://github.com/k3s-io/k3s-selinux/releases/download/v1.0.testing.1/k3s-selinux-1.0-1.sle.noarch.rpm",
         'MICRO_REPO': ENV['MICRO_REPO'] || "SUSE-MicroOS-5.1-Pool",
     }
     sh.inline = <<~SHELL
